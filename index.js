@@ -1,16 +1,18 @@
 /**
  * @file index.js
  *
- * @brief Main entry point for Asoubot. Initializes the Discord client, sets up event handlers, and starts the RSS polling loop.
+ * @brief Main entry point for Asoubot. Initializes the Discord client, sets up event handlers, registers slash commands, and starts the RSS polling loop.
  */
 
 'use strict';
 
 require('dotenv').config();
 
-const { Client, GatewayIntentBits } = require('discord.js');
+const { Client, GatewayIntentBits, Events } = require('discord.js');
 const { log, error } = require('./logger');
 const { startRssLoop } = require('./rss');
+const { handleInteraction, registerCommands } = require('./commands');
+const { onGuildJoin, onGuildLeave } = require('./guild_events');
 
 const {
     listTrackedAccounts,
@@ -92,8 +94,15 @@ async function notifyGuild(guildId, tweet) {
     }
 }
 
-client.once('clientReady', () => {
+client.once(Events.ClientReady, async () => {
     log(`Logged in as ${client.user.tag}`);
+
+    try {
+        await registerCommands(client);
+        log('Slash commands registered.');
+    } catch (err) {
+        error('Failed to register slash commands:', err);
+    }
 
     startRssLoop({
         client,
@@ -103,7 +112,40 @@ client.once('clientReady', () => {
     });
 });
 
-client.on('error', (err) => {
+client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+        await handleInteraction(interaction);
+    } catch (err) {
+        error('Interaction handler error:', err);
+
+        if (interaction.isRepliable && interaction.isRepliable()) {
+            if (!interaction.replied && !interaction.deferred) {
+                await interaction.reply({
+                    content: 'Command failed unexpectedly.',
+                    ephemeral: true,
+                }).catch(() => {});
+            }
+        }
+    }
+});
+
+client.on(Events.GuildCreate, async (guild) => {
+    try {
+        await onGuildJoin(guild);
+    } catch (err) {
+        error('onGuildJoin error:', err);
+    }
+});
+
+client.on(Events.GuildDelete, async (guild) => {
+    try {
+        await onGuildLeave(guild);
+    } catch (err) {
+        error('onGuildLeave error:', err);
+    }
+});
+
+client.on(Events.Error, (err) => {
     error('Discord client error:', err);
 });
 
